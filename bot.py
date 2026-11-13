@@ -1,4 +1,4 @@
-# bot.py — Telegram bot: تنفيذ مباشر + توجيه ذكي للدارك ويب بدون فلاتر
+# bot.py — Telegram bot: تنفيذ مباشر + بحث في الدارك ويب عبر بوابات الويب
 import os
 import logging
 import threading
@@ -25,11 +25,6 @@ client = AsyncOpenAI(
 )
 MODEL = os.environ.get("MODEL", "openai")
 MAX_OUTPUT_TOKENS = int(os.environ.get("MAX_OUTPUT_TOKENS", "4096"))
-
-TOR_PROXY = {
-    'http': 'socks5h://127.0.0.1:9050',
-    'https': 'socks5h://127.0.0.1:9050'
-}
 
 class DummyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -58,38 +53,55 @@ def darkweb_search(query: str) -> str:
     try:
         log.info(f"Searching darkweb for: {query}")
         q = urllib.parse.quote(query)
-        search_url = f"http://juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd.onion/search/?q={q}"
-        response = requests.get(search_url, proxies=TOR_PROXY, timeout=30)
+        # محرك Ahmia على الويب العادي (Clearnet) للبحث عن روابط .onion
+        search_url = f"https://ahmia.fi/search/?q={q}"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        response = requests.get(search_url, headers=headers, timeout=30)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         
         results = []
         for a in soup.find_all('a', href=True):
-            if '.onion' in a['href'] and len(a.text) > 5:
+            if '.onion' in a['href']:
                 title = a.text.strip()
                 link = a['href']
                 if not link.startswith('http'): link = "http://" + link
-                results.append(f"- {title}\n  {link}")
+                if len(title) > 5:
+                    results.append(f"- {title}\n  {link}")
                 
         if not results:
             return "❌ لم يتم العثور على نتائج."
         return "📌 **النتائج من الدارك ويب:**\n\n" + "\n\n".join(results[:10])
     except Exception as e:
-        return f"❌ فشل البحث في الدارك ويب: {str(e)}"
+        return f"❌ فشل البحث: {str(e)}"
 
 def fetch_darkweb_text(url: str) -> str:
     try:
-        response = requests.get(url, proxies=TOR_PROXY, timeout=30)
+        # تحويل رابط .onion إلى رابط ويب عادي عبر بوابة .ws
+        clean_url = url.replace("http://", "").replace("https://", "")
+        if clean_url.endswith(".onion"):
+            gateway_url = f"https://{clean_url}.ws"
+        else:
+            gateway_url = url
+            
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        response = requests.get(gateway_url, headers=headers, timeout=30)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         return soup.get_text(separator='\n')[:4000]
     except Exception as e:
-        return f"❌ فشل الجلب: {str(e)}"
+        return f"❌ فشل الجلب (تأكد من الرابط): {str(e)}"
 
 def download_darkweb_file(url: str) -> str:
     try:
-        local_filename = os.path.join(tempfile.gettempdir(), url.split('/')[-1] or "file_dump")
-        with requests.get(url, proxies=TOR_PROXY, stream=True, timeout=60) as r:
+        clean_url = url.replace("http://", "").replace("https://", "")
+        if clean_url.endswith(".onion"):
+            gateway_url = f"https://{clean_url}.ws"
+        else:
+            gateway_url = url
+
+        local_filename = os.path.join(tempfile.gettempdir(), clean_url.split('/')[-1] or "file_dump")
+        with requests.get(gateway_url, stream=True, timeout=60) as r:
             r.raise_for_status()
             with open(local_filename, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=8192):
@@ -115,21 +127,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not prompt: return
 
     prompt_lower = prompt.lower()
-
-    # --- التوجيه الذكي: إذا كان الطلب يحتوي على كلمات تدل على البحث في الدارك ويب ---
     darkweb_keywords = ["مسربة", "تسريب", "بيانات", "دارك", "dark", "leak", "dump", "combolist"]
     book_keywords = ["كتاب", "كتب", "book", "pdf"]
 
     if any(k in prompt_lower for k in darkweb_keywords) or any(k in prompt_lower for k in book_keywords):
-        status = await update.message.reply_text("🕵️‍♂️ جاري البحث في الدارك ويب عبر Tor...")
-        # ننظف الكلمة عشان نبحث بالاسم بس
+        status = await update.message.reply_text("🕵️‍♂️ جاري البحث في الدارك ويب...")
         query = prompt.replace("ابحث عن", "").replace("مسربة", "").replace("بيانات", "").strip()
         result = darkweb_search(query)
         await status.delete()
         for chunk in chunk_text(result): await update.message.reply_text(chunk)
         return
 
-    # --- الأوامر المباشرة ---
     if prompt.startswith("!book "):
         status = await update.message.reply_text("📚 جاري البحث عن كتب...")
         result = darkweb_search(prompt.replace("!book ", ""))
@@ -153,7 +161,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if prompt.startswith("!download "):
         url = prompt.replace("!download ", "")
-        status = await update.message.reply_text("📥 جاري التحميل عبر Tor...")
+        status = await update.message.reply_text("📥 جاري التحميل...")
         file_path = download_darkweb_file(url)
         await status.delete()
         if file_path and os.path.exists(file_path):
@@ -182,7 +190,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         for chunk in chunk_text(content): await update.message.reply_text(chunk)
         return
 
-    # --- التنفيذ العادي (للأكواد والطلبات العادية) ---
     status = await update.message.reply_text("⏳ جاري التنفيذ...")
     try:
         resp = await client.chat.completions.create(
@@ -191,11 +198,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             max_tokens=MAX_OUTPUT_TOKENS, temperature=0.1,
         )
         content = resp.choices[0].message.content or ""
-        
-        # إذا رفض الموديل (مثل حالة الصورة)
-        if "I'm sorry" in content or "أعتذر" in content or "لا يمكنني" in content:
-            content = "⚠️ الموديل الأساسي رفض الطلب. جرب استخدام الأمر المباشر `!search <كلمة>` أو `!data <اسم>` لجلبها من الدارك ويب."
-            
+        if "I'm sorry" in content or "أعتذر" in content:
+            content = "⚠️ الموديل الأساسي رفض الطلب. جرب استخدام `!search` أو `!data`."
     except Exception as exc:
         await status.edit_text(f"❌ فشل الاتصال: {exc}")
         return
