@@ -53,7 +53,6 @@ def darkweb_search(query: str) -> str:
     try:
         log.info(f"Searching darkweb for: {query}")
         q = urllib.parse.quote(query)
-        # محرك Ahmia على الويب العادي (Clearnet) للبحث عن روابط .onion
         search_url = f"https://ahmia.fi/search/?q={q}"
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         response = requests.get(search_url, headers=headers, timeout=30)
@@ -62,22 +61,27 @@ def darkweb_search(query: str) -> str:
         
         results = []
         for a in soup.find_all('a', href=True):
-            if '.onion' in a['href']:
-                title = a.text.strip()
-                link = a['href']
-                if not link.startswith('http'): link = "http://" + link
-                if len(title) > 5:
+            link = a['href']
+            title = a.text.strip()
+            
+            # تخطي رابط أهيميا نفسه والروابط الفارغة
+            if '.onion' in link and "juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd" not in link:
+                if not link.startswith('http'): 
+                    link = "http://" + link
+                if len(title) > 3:
                     results.append(f"- {title}\n  {link}")
                 
         if not results:
-            return "❌ لم يتم العثور على نتائج."
-        return "📌 **النتائج من الدارك ويب:**\n\n" + "\n\n".join(results[:10])
+            return "❌ لم يتم العثور على نتائج حقيقية. جرب كلمة بحث أخرى."
+        
+        # إزالة التكرارات
+        unique_results = list(dict.fromkeys(results))
+        return "📌 **النتائج من الدارك ويب:**\n\n" + "\n\n".join(unique_results[:10])
     except Exception as e:
         return f"❌ فشل البحث: {str(e)}"
 
 def fetch_darkweb_text(url: str) -> str:
     try:
-        # تحويل رابط .onion إلى رابط ويب عادي عبر بوابة .ws
         clean_url = url.replace("http://", "").replace("https://", "")
         if clean_url.endswith(".onion"):
             gateway_url = f"https://{clean_url}.ws"
