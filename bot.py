@@ -1,9 +1,10 @@
-# bot.py — Telegram bot: تنفيذ مباشر + بحث في الدارك ويب عبر بوابات الويب
+# bot.py — Telegram bot: تنفيذ مباشر + بحث في الدارك ويب مع ترجمة تلقائية
 import os
 import logging
 import threading
 import asyncio
 import requests
+import re
 from bs4 import BeautifulSoup
 import urllib.parse
 import tempfile
@@ -49,6 +50,24 @@ def chunk_text(text: str, size: int = 3900) -> list[str]:
     if buf: chunks.append("".join(buf))
     return chunks
 
+def is_arabic(text):
+    return bool(re.search(r'[\u0600-\u06FF]', text))
+
+async def translate_to_english(text: str) -> str:
+    if not is_arabic(text): return text
+    try:
+        resp = await client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": "Translate the following search query to English for a dark web search engine. Output only the translated text, no extra words."},
+                {"role": "user", "content": text}
+            ],
+            max_tokens=50, temperature=0.1,
+        )
+        return resp.choices[0].message.content.strip()
+    except:
+        return text
+
 def darkweb_search(query: str) -> str:
     try:
         log.info(f"Searching darkweb for: {query}")
@@ -64,7 +83,6 @@ def darkweb_search(query: str) -> str:
             link = a['href']
             title = a.text.strip()
             
-            # تخطي رابط أهيميا نفسه والروابط الفارغة
             if '.onion' in link and "juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd" not in link:
                 if not link.startswith('http'): 
                     link = "http://" + link
@@ -72,9 +90,8 @@ def darkweb_search(query: str) -> str:
                     results.append(f"- {title}\n  {link}")
                 
         if not results:
-            return "❌ لم يتم العثور على نتائج حقيقية. جرب كلمة بحث أخرى."
+            return "❌ لم يتم العثور على نتائج. جرب البحث بالإنجليزية للحصول على نتائج أدق."
         
-        # إزالة التكرارات
         unique_results = list(dict.fromkeys(results))
         return "📌 **النتائج من الدارك ويب:**\n\n" + "\n\n".join(unique_results[:10])
     except Exception as e:
@@ -119,7 +136,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user.id != OWNER_ID: return
     await update.message.reply_text(
         "أنا تحت أمرك يا سيدي.\n"
-        "أرسل طلبك مباشرة (مثل: ابحث عن بيانات مسربة لشركة معينة) وسأتصرف.\n"
+        "أرسل طلبك مباشرة (مثل: ابحث عن كتاب cybersecurity) وسأتصرف.\n"
         "أو استخدم الأوامر المباشرة:\n"
         "`!explain <رابط>`\n`!book <اسم>`\n`!data <اسم>`\n`!search <كلمة>`\n`!download <رابط>`", 
         parse_mode="Markdown"
@@ -132,11 +149,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     prompt_lower = prompt.lower()
     darkweb_keywords = ["مسربة", "تسريب", "بيانات", "دارك", "dark", "leak", "dump", "combolist"]
-    book_keywords = ["كتاب", "كتب", "book", "pdf"]
+    book_keywords = ["كتاب", "كتب", "book", "pdf", "امن", "أمن", "سيبراني"]
 
     if any(k in prompt_lower for k in darkweb_keywords) or any(k in prompt_lower for k in book_keywords):
-        status = await update.message.reply_text("🕵️‍♂️ جاري البحث في الدارك ويب...")
-        query = prompt.replace("ابحث عن", "").replace("مسربة", "").replace("بيانات", "").strip()
+        status = await update.message.reply_text("🕵️‍♂️ جاري تجهيز البحث في الدارك ويب...")
+        
+        # تنظيف الكلمات العربية
+        query = prompt.replace("ابحث عن", "").replace("مسربة", "").replace("بيانات", "").replace("اريد", "").replace("كتاب", "").replace("من الدرك ويب", "").strip()
+        
+        # ترجمة تلقائية إذا كان النص عربي
+        if is_arabic(query):
+            await status.edit_text("🔄 جاري ترجمة الطلب للبحث في الدارك ويب...")
+            query = await translate_to_english(query)
+            await status.edit_text(f"🕵️‍♂️ جاري البحث عن: {query}")
+
         result = darkweb_search(query)
         await status.delete()
         for chunk in chunk_text(result): await update.message.reply_text(chunk)
@@ -144,21 +170,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if prompt.startswith("!book "):
         status = await update.message.reply_text("📚 جاري البحث عن كتب...")
-        result = darkweb_search(prompt.replace("!book ", ""))
+        q = prompt.replace("!book ", "")
+        if is_arabic(q): q = await translate_to_english(q)
+        result = darkweb_search(q)
         await status.delete()
         for chunk in chunk_text(result): await update.message.reply_text(chunk)
         return
 
     if prompt.startswith("!data "):
         status = await update.message.reply_text("🗄️ جاري البحث عن بيانات...")
-        result = darkweb_search(prompt.replace("!data ", ""))
+        q = prompt.replace("!data ", "")
+        if is_arabic(q): q = await translate_to_english(q)
+        result = darkweb_search(q)
         await status.delete()
         for chunk in chunk_text(result): await update.message.reply_text(chunk)
         return
 
     if prompt.startswith("!search "):
         status = await update.message.reply_text("🔍 جاري البحث...")
-        result = darkweb_search(prompt.replace("!search ", ""))
+        q = prompt.replace("!search ", "")
+        if is_arabic(q): q = await translate_to_english(q)
+        result = darkweb_search(q)
         await status.delete()
         for chunk in chunk_text(result): await update.message.reply_text(chunk)
         return
@@ -202,8 +234,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             max_tokens=MAX_OUTPUT_TOKENS, temperature=0.1,
         )
         content = resp.choices[0].message.content or ""
-        if "I'm sorry" in content or "أعتذر" in content:
-            content = "⚠️ الموديل الأساسي رفض الطلب. جرب استخدام `!search` أو `!data`."
     except Exception as exc:
         await status.edit_text(f"❌ فشل الاتصال: {exc}")
         return
