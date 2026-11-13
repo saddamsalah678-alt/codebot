@@ -1,2 +1,4 @@
 python-telegram-bot==21.6
 openai>=1.40,<2
+requests[socks]
+beautifulsoup4
