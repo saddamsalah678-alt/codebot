@@ -2,6 +2,7 @@
 import os
 import logging
 import threading
+import asyncio
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -27,6 +28,7 @@ log = logging.getLogger("codebot")
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 OWNER_ID = int(os.environ["OWNER_ID"])
 
+# مزوّد مجاني — Pollinations بدون مفتاح
 client = AsyncOpenAI(
     api_key="not-needed",
     base_url=os.environ.get("OPENAI_BASE_URL", "https://text.pollinations.ai/openai"),
@@ -52,9 +54,10 @@ SYSTEM_PROMPTS = {
         "(3) المتطلبات: لغة، إصدار، حزم/مكتبات مع أوامر تثبيتها، "
         "(4) خطوات التشغيل بالترتيب، مع متغيّرات البيئة إن وُجدت، "
         "(5) الأوامر الجاهزة للنسخ، "
-        "(6) أي نقاط يجب الانتباه لها. "
+        "(6) أي نقاط يجب الانتباه لها (مدخلات مطلوبة، ملفات، صلاحيات). "
         "كن مفصّلًا وواضحًا. لا تختصر. لا تحذف خطوة. "
-        "أبقِ أسماء الدوال والمكتبات والأوامر بالإنجليزية، والشرح بالعربية."
+        "أبقِ أسماء الدوال والمكتبات والأوامر بالإنجليزية كما هي، "
+        "لكن الشرح كله بالعربية."
     ),
 }
 
@@ -65,7 +68,7 @@ class DummyHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"Bot is running!")
     def log_message(self, format, *args):
-        pass # إخفاء سجلات السيرفر الوهمي
+        pass
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 8080))
@@ -176,7 +179,10 @@ async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 def main() -> None:
-    # تشغيل السيرفر الوهمي في الخلفية عشان Render ما يطفي البوت
+    # إصلاح مشكلة Python 3.14 في Render
+    asyncio.set_event_loop(asyncio.new_event_loop())
+
+    # تشغيل السيرفر الوهمي في الخلفية
     threading.Thread(target=run_dummy_server, daemon=True).start()
 
     app = Application.builder().token(TELEGRAM_TOKEN).build()
