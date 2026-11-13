@@ -1,4 +1,4 @@
-# bot.py — Telegram bot: تنفيذ مباشر + جلب وتحميل من الدارك ويب عبر Tor
+# bot.py — Telegram bot: تنفيذ مباشر + توجيه ذكي للدارك ويب بدون فلاتر
 import os
 import logging
 import threading
@@ -54,9 +54,9 @@ def chunk_text(text: str, size: int = 3900) -> list[str]:
     if buf: chunks.append("".join(buf))
     return chunks
 
-def darkweb_search(query: str, category: str = "all") -> str:
+def darkweb_search(query: str) -> str:
     try:
-        log.info(f"Searching darkweb for: {query} ({category})")
+        log.info(f"Searching darkweb for: {query}")
         q = urllib.parse.quote(query)
         search_url = f"http://juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd.onion/search/?q={q}"
         response = requests.get(search_url, proxies=TOR_PROXY, timeout=30)
@@ -73,9 +73,9 @@ def darkweb_search(query: str, category: str = "all") -> str:
                 
         if not results:
             return "❌ لم يتم العثور على نتائج."
-        return "📌 **النتائج:**\n\n" + "\n\n".join(results[:10])
+        return "📌 **النتائج من الدارك ويب:**\n\n" + "\n\n".join(results[:10])
     except Exception as e:
-        return f"❌ فشل البحث: {str(e)}"
+        return f"❌ فشل البحث في الدارك ويب: {str(e)}"
 
 def fetch_darkweb_text(url: str) -> str:
     try:
@@ -103,13 +103,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user.id != OWNER_ID: return
     await update.message.reply_text(
         "أنا تحت أمرك يا سيدي.\n"
-        "الأوامر المتاحة:\n"
-        "`!explain <رابط>` - شرح كود مع فائدته\n"
-        "`!book <اسم>` - بحث عن كتب\n"
-        "`!data <اسم>` - بحث عن بيانات مسربة\n"
-        "`!search <كلمة>` - بحث عام\n"
-        "`!download <رابط>` - تحميل ملف وإرساله\n"
-        "أو أرسل طلبك مباشرة للذكاء الاصطناعي.", parse_mode="Markdown"
+        "أرسل طلبك مباشرة (مثل: ابحث عن بيانات مسربة لشركة معينة) وسأتصرف.\n"
+        "أو استخدم الأوامر المباشرة:\n"
+        "`!explain <رابط>`\n`!book <اسم>`\n`!data <اسم>`\n`!search <كلمة>`\n`!download <رابط>`", 
+        parse_mode="Markdown"
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -117,16 +114,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     prompt = (update.message.text or "").strip()
     if not prompt: return
 
+    prompt_lower = prompt.lower()
+
+    # --- التوجيه الذكي: إذا كان الطلب يحتوي على كلمات تدل على البحث في الدارك ويب ---
+    darkweb_keywords = ["مسربة", "تسريب", "بيانات", "دارك", "dark", "leak", "dump", "combolist"]
+    book_keywords = ["كتاب", "كتب", "book", "pdf"]
+
+    if any(k in prompt_lower for k in darkweb_keywords) or any(k in prompt_lower for k in book_keywords):
+        status = await update.message.reply_text("🕵️‍♂️ جاري البحث في الدارك ويب عبر Tor...")
+        # ننظف الكلمة عشان نبحث بالاسم بس
+        query = prompt.replace("ابحث عن", "").replace("مسربة", "").replace("بيانات", "").strip()
+        result = darkweb_search(query)
+        await status.delete()
+        for chunk in chunk_text(result): await update.message.reply_text(chunk)
+        return
+
+    # --- الأوامر المباشرة ---
     if prompt.startswith("!book "):
         status = await update.message.reply_text("📚 جاري البحث عن كتب...")
-        result = darkweb_search(prompt.replace("!book ", ""), "books")
+        result = darkweb_search(prompt.replace("!book ", ""))
         await status.delete()
         for chunk in chunk_text(result): await update.message.reply_text(chunk)
         return
 
     if prompt.startswith("!data "):
         status = await update.message.reply_text("🗄️ جاري البحث عن بيانات...")
-        result = darkweb_search(prompt.replace("!data ", ""), "data")
+        result = darkweb_search(prompt.replace("!data ", ""))
         await status.delete()
         for chunk in chunk_text(result): await update.message.reply_text(chunk)
         return
@@ -147,7 +160,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await update.message.reply_document(document=open(file_path, 'rb'), filename=os.path.basename(file_path))
             os.remove(file_path)
         else:
-            await update.message.reply_text("❌ فشل التحميل أو الملف غير مدعوم.")
+            await update.message.reply_text("❌ فشل التحميل.")
         return
 
     if prompt.startswith("!explain "):
@@ -155,10 +168,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         status = await update.message.reply_text("🧠 جاري سحب الكود وشرحه...")
         code_text = fetch_darkweb_text(url)
         
-        sys_prompt = (
-            "أنت خبير برمجة. سأعطيك كوداً تم سحبه من الدارك ويب. "
-            "قم بشرح وظيفة الكود بالتفصيل، وما هي الفائدة العملية منه، وكيف يمكن استخدامه."
-        )
+        sys_prompt = "أنت خبير برمجة. اشرح هذا الكود وفائدته."
         try:
             resp = await client.chat.completions.create(
                 model=MODEL,
@@ -168,11 +178,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             content = resp.choices[0].message.content or ""
         except Exception as e:
             content = f"❌ فشل الشرح: {e}"
-            
         await status.delete()
         for chunk in chunk_text(content): await update.message.reply_text(chunk)
         return
 
+    # --- التنفيذ العادي (للأكواد والطلبات العادية) ---
     status = await update.message.reply_text("⏳ جاري التنفيذ...")
     try:
         resp = await client.chat.completions.create(
@@ -181,6 +191,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             max_tokens=MAX_OUTPUT_TOKENS, temperature=0.1,
         )
         content = resp.choices[0].message.content or ""
+        
+        # إذا رفض الموديل (مثل حالة الصورة)
+        if "I'm sorry" in content or "أعتذر" in content or "لا يمكنني" in content:
+            content = "⚠️ الموديل الأساسي رفض الطلب. جرب استخدام الأمر المباشر `!search <كلمة>` أو `!data <اسم>` لجلبها من الدارك ويب."
+            
     except Exception as exc:
         await status.edit_text(f"❌ فشل الاتصال: {exc}")
         return
