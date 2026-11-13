@@ -7,6 +7,7 @@ import requests
 from bs4 import BeautifulSoup
 import urllib.parse
 import tempfile
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -40,6 +41,7 @@ class DummyHandler(BaseHTTPRequestHandler):
 def run_dummy_server():
     port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(("0.0.0.0", port), DummyHandler)
+    log.info(f"Dummy web server running on port {port}")
     server.serve_forever()
 
 def chunk_text(text: str, size: int = 3900) -> list[str]:
@@ -52,12 +54,10 @@ def chunk_text(text: str, size: int = 3900) -> list[str]:
     if buf: chunks.append("".join(buf))
     return chunks
 
-# --- دوال الدارك ويب ---
 def darkweb_search(query: str, category: str = "all") -> str:
     try:
         log.info(f"Searching darkweb for: {query} ({category})")
         q = urllib.parse.quote(query)
-        # استخدام محرك بحث Ahmia (يدعم البحث العام، الكتب، والبيانات)
         search_url = f"http://juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd.onion/search/?q={q}"
         response = requests.get(search_url, proxies=TOR_PROXY, timeout=30)
         response.raise_for_status()
@@ -99,7 +99,6 @@ def download_darkweb_file(url: str) -> str:
         log.error(f"Download failed: {e}")
         return ""
 
-# --- أوامر البوت ---
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user.id != OWNER_ID: return
     await update.message.reply_text(
@@ -118,7 +117,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     prompt = (update.message.text or "").strip()
     if not prompt: return
 
-    # أمر البحث عن كتب
     if prompt.startswith("!book "):
         status = await update.message.reply_text("📚 جاري البحث عن كتب...")
         result = darkweb_search(prompt.replace("!book ", ""), "books")
@@ -126,7 +124,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         for chunk in chunk_text(result): await update.message.reply_text(chunk)
         return
 
-    # أمر البحث عن بيانات
     if prompt.startswith("!data "):
         status = await update.message.reply_text("🗄️ جاري البحث عن بيانات...")
         result = darkweb_search(prompt.replace("!data ", ""), "data")
@@ -134,7 +131,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         for chunk in chunk_text(result): await update.message.reply_text(chunk)
         return
 
-    # أمر البحث العام
     if prompt.startswith("!search "):
         status = await update.message.reply_text("🔍 جاري البحث...")
         result = darkweb_search(prompt.replace("!search ", ""))
@@ -142,7 +138,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         for chunk in chunk_text(result): await update.message.reply_text(chunk)
         return
 
-    # أمر التحميل
     if prompt.startswith("!download "):
         url = prompt.replace("!download ", "")
         status = await update.message.reply_text("📥 جاري التحميل عبر Tor...")
@@ -155,7 +150,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await update.message.reply_text("❌ فشل التحميل أو الملف غير مدعوم.")
         return
 
-    # أمر شرح الكود
     if prompt.startswith("!explain "):
         url = prompt.replace("!explain ", "")
         status = await update.message.reply_text("🧠 جاري سحب الكود وشرحه...")
@@ -179,7 +173,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         for chunk in chunk_text(content): await update.message.reply_text(chunk)
         return
 
-    # التنفيذ العادي
     status = await update.message.reply_text("⏳ جاري التنفيذ...")
     try:
         resp = await client.chat.completions.create(
