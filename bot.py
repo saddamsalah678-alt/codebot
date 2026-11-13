@@ -1,6 +1,9 @@
 # bot.py — Telegram bot خاص: OWNER_ID فقط يمكنه الاستخدام.
 import os
 import logging
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -22,9 +25,8 @@ logging.basicConfig(
 log = logging.getLogger("codebot")
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
-OWNER_ID = int(os.environ["OWNER_ID"])  # رقم تيليجرام الخاص بك
+OWNER_ID = int(os.environ["OWNER_ID"])
 
-# مزوّد مجاني — Pollinations بدون مفتاح
 client = AsyncOpenAI(
     api_key="not-needed",
     base_url=os.environ.get("OPENAI_BASE_URL", "https://text.pollinations.ai/openai"),
@@ -50,20 +52,33 @@ SYSTEM_PROMPTS = {
         "(3) المتطلبات: لغة، إصدار، حزم/مكتبات مع أوامر تثبيتها، "
         "(4) خطوات التشغيل بالترتيب، مع متغيّرات البيئة إن وُجدت، "
         "(5) الأوامر الجاهزة للنسخ، "
-        "(6) أي نقاط يجب الانتباه لها (مدخلات مطلوبة، ملفات، صلاحيات). "
+        "(6) أي نقاط يجب الانتباه لها. "
         "كن مفصّلًا وواضحًا. لا تختصر. لا تحذف خطوة. "
-        "أبقِ أسماء الدوال والمكتبات والأوامر بالإنجليزية كما هي، "
-        "لكن الشرح كله بالعربية."
+        "أبقِ أسماء الدوال والمكتبات والأوامر بالإنجليزية، والشرح بالعربية."
     ),
 }
 
+# --- سيرفر وهمي لإرضاء Render ---
+class DummyHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running!")
+    def log_message(self, format, *args):
+        pass # إخفاء سجلات السيرفر الوهمي
+
+def run_dummy_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), DummyHandler)
+    log.info(f"Dummy web server running on port {port}")
+    server.serve_forever()
+# ---------------------------------
 
 def chunk_text(text: str, size: int = 3900) -> list[str]:
-    """تقسيم النص الطويل على حدود الأسطر لتفادي حد 4096 حرف في تيليجرام."""
     if len(text) <= size:
         return [text] if text else [""]
-    chunks: list[str] = []
-    buf: list[str] = []
+    chunks = []
+    buf = []
     cur = 0
     for line in text.splitlines(keepends=True):
         if cur + len(line) > size and buf:
@@ -75,9 +90,7 @@ def chunk_text(text: str, size: int = 3900) -> list[str]:
         chunks.append("".join(buf))
     return chunks
 
-
 async def guard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """يرفض كل من ليس OWNER_ID. يُنفّذ قبل أي handler آخر."""
     user = update.effective_user
     if user is None:
         return
@@ -87,13 +100,10 @@ async def guard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await update.effective_message.reply_text("هذا البوت خاص.")
         raise ApplicationHandlerStop
 
-
 async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """يرسل رقم المستخدم."""
     user = update.effective_user
     if user:
         await update.message.reply_text(f"معرّفك: `{user.id}`", parse_mode="Markdown")
-
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     kb = InlineKeyboardMarkup(
@@ -109,7 +119,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         reply_markup=kb,
     )
 
-
 async def on_generate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
@@ -117,16 +126,12 @@ async def on_generate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     await q.edit_message_text("⚙️ أرسل وصف الكود المطلوب.")
     return WAITING_PROMPT
 
-
 async def on_explain(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
     context.user_data[MODE_KEY] = MODE_EXPLAIN
-    await q.edit_message_text(
-        "📖 أرسل الكود (أو وصف المشروع) وسأشرح وظيفته ومتطلباته وخطوات تشغيله."
-    )
+    await q.edit_message_text("📖 أرسل الكود وسأشرح وظيفته ومتطلباته وخطوات تشغيله.")
     return WAITING_PROMPT
-
 
 async def on_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     prompt = (update.message.text or "").strip()
@@ -165,19 +170,18 @@ async def on_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.pop(MODE_KEY, None)
     return ConversationHandler.END
 
-
 async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.pop(MODE_KEY, None)
     await update.message.reply_text("تم الإلغاء.")
     return ConversationHandler.END
 
-
 def main() -> None:
+    # تشغيل السيرفر الوهمي في الخلفية عشان Render ما يطفي البوت
+    threading.Thread(target=run_dummy_server, daemon=True).start()
+
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    # guard أولًا — group=-1 ليُشغّل قبل كل شيء
     app.add_handler(TypeHandler(Update, guard), group=-1)
-    # /id متاح للجميع حتى تعرف رقمك قبل ضبط OWNER_ID
     app.add_handler(CommandHandler("id", cmd_id), group=0)
 
     conv = ConversationHandler(
@@ -200,7 +204,6 @@ def main() -> None:
 
     log.info("bot starting — model=%s owner=%s", MODEL, OWNER_ID)
     app.run_polling(allowed_updates=Update.ALL_TYPES)
-
 
 if __name__ == "__main__":
     main()
